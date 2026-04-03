@@ -37,5 +37,34 @@ Participar de licitações públicas exige a leitura diária de dezenas de edita
 * PostgreSQL instalado e rodando
 
 ### 1. Clonar o repositório
+
 ```bash
-git clone [https://github.com/Ian-Siveris/tcc-project.git](https://github.com/Ian-Siveris/tcc-project.git)
+git clone https://github.com/Ian-Siveris/tcc-project.git
+cd tcc-project
+```
+### 2. Configurar o Back-end
+```bash
+cd server
+npm install
+```
+Crie um arquivo .env na pasta server:
+```bash
+DATABASE_URL="postgresql://usuario:senha@localhost:5432/vertice_db?schema=public"
+OPENAI_API_KEY="SuaChaveDaOpenAIAqui"
+```
+Execute os comandos de banco e inicie o servidor:
+```bash
+npx prisma db push
+npx prisma generate
+npm run dev
+```
+Servidor rodando em: http://localhost:3001
+
+### 3. Configurar o Front-end
+```bash
+cd ../agente-licitacoes-ui
+npm install
+npm run dev
+```
+Autor
+Ian Siveris Desenvolvedor e idealizador do Vértice Data
