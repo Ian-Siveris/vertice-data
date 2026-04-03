@@ -28,5 +28,6 @@ model Licitacao {
   dataAbertura    String
   scoreIA         Int
   justificativa   String
+  propostaGerada  Boolean  @default(false)
   createdAt       DateTime @default(now())
 }
