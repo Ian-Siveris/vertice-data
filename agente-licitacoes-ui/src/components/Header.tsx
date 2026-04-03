@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Search, User, Bell } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
-import { NotificacoesPanel } from './NotificacoesPanel'; // <-- Importe o painel
+import { NotificacoesPanel } from './NotificacoesPanel';
 
 export function Header() {
   const location = useLocation();
-  const [painelAberto, setPainelAberto] = useState(false); // Estado para controlar o painel
+  const [painelAberto, setPainelAberto] = useState(false);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -21,6 +21,7 @@ export function Header() {
             <span>Vértice<span className="text-brand-green">.Data</span></span>
           </Link>
 
+          {/* Menu de Navegacao Principal */}
           <nav className="hidden md:flex items-center gap-8 absolute left-1/2 transform -translate-x-1/2">
             <Link 
               to="/" 
@@ -34,10 +35,16 @@ export function Header() {
             >
               Busca Geral
             </Link>
+            {/* NOVO BOTAO: Gestao e Propostas */}
+            <Link 
+              to="/dashboard" 
+              className={`text-sm font-medium transition-colors ${isActive('/dashboard') ? 'text-brand-green border-b-2 border-brand-green pb-1' : 'text-slate-300 hover:text-white'}`}
+            >
+              Gestao e Propostas
+            </Link>
           </nav>
 
           <div className="flex items-center gap-4">
-            {/* O botão do sino agora altera o estado painelAberto */}
             <button 
               onClick={() => setPainelAberto(true)}
               className="p-2 hover:bg-blue-800 rounded-full transition-colors relative"
@@ -54,7 +61,6 @@ export function Header() {
         </div>
       </header>
 
-      {/* Renderiza o painel lateral passando o controle de abrir/fechar */}
       <NotificacoesPanel isOpen={painelAberto} onClose={() => setPainelAberto(false)} />
     </>
   );

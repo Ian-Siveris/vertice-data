@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -12,26 +7,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Modelo para armazenar os dados da empresa (O contexto da IA)
 model Perfil {
-  id                String   @id @default(uuid())
+  id                Int      @id @default(autoincrement())
   razaoSocial       String
-  cnpj              String   @unique
-  cnaes             String   
-  atestadosResumo   String   @db.Text
+  cnpj              String
+  porte             String   @default("Nao informado")
+  sede              String   @default("Nao informada")
+  cnaes             String
+  atestadosResumo   String
+  diferenciais      String   @default("Nenhum")
   capitalSocial     Float
   patrimonioLiquido Float
-  updatedAt         DateTime @updatedAt
 }
 
-// Modelo para salvar o histórico de licitações
 model Licitacao {
-  id             String   @id @default(uuid())
-  orgao          String
-  objeto         String   @db.Text
-  valorEstimado  String
-  dataAbertura   String
-  scoreIA        Int
-  justificativa  String   @db.Text
-  createdAt      DateTime @default(now())
+  id              Int      @id @default(autoincrement())
+  orgao           String
+  objeto          String
+  valorEstimado   String
+  dataAbertura    String
+  scoreIA         Int
+  justificativa   String
+  createdAt       DateTime @default(now())
 }
