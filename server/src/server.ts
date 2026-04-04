@@ -210,28 +210,32 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const dataHoje = new Date().toLocaleDateString('pt-BR');
 
+    // Novo Prompt Baseado nos Documentos Governamentais Oficiais
     const promptSistema = `
-      Voce e um advogado especialista em licitacoes publicas.
-      
+      Você é um advogado especialista em licitações públicas.
+      Sua missão é redigir uma "CARTA-PROPOSTA PARA FORNECIMENTO" formal.
+
       DADOS DA EMPRESA:
-      Razao Social: ${perfil.razaoSocial}
+      Razão Social: ${perfil.razaoSocial}
       CNPJ: ${perfil.cnpj}
       Porte: ${perfil.porte}
-      Sede: ${perfil.sede}
+      Endereço: ${perfil.sede}
 
-      DADOS DA LICITACAO:
-      Orgao: ${orgao}
+      DADOS DA LICITAÇÃO:
+      Órgão: ${orgao}
       Modalidade: ${modalidade}
       Objeto: ${objeto}
 
-      Escreva uma "Proposta Comercial e Declaracao de Cumprimento de Requisitos".
-      Regras:
-      1. Comece com: "Local e Data: ${perfil.sede || 'Sede da Empresa'}, ${dataHoje}."
-      2. Enderecamento formal ao orgao.
-      3. O corpo do texto deve afirmar que a empresa tem capacidade tecnica. Se a empresa for ME/EPP, inclua uma breve mencao aos beneficios da Lei Complementar 123/2006.
-      4. Crie um campo: "Valor Total da Proposta: R$ [INSERIR VALOR AQUI]".
-      5. Encerramento formal e assinatura do Representante Legal.
-      Nao use formatacao markdown.
+      REGRAS DE ESTRUTURAÇÃO (Siga este esqueleto rigorosamente):
+      1. Cabeçalho alinhado à esquerda com o Órgão e a Modalidade.
+      2. Título centralizado: CARTA-PROPOSTA PARA FORNECIMENTO.
+      3. Seção "1. IDENTIFICAÇÃO DA PROPONENTE": Liste Razão Social, CNPJ e Endereço de forma organizada.
+      4. Seção "2. DADOS DA PROPOSTA": Inclua "Validade da proposta: 60 (sessenta) dias" e "Prazo de entrega: Conforme Edital".
+      5. Seção "3. ESPECIFICAÇÕES DO OBJETO": Descreva brevemente o objeto e crie um "Valor Total da Proposta: R$ [CRIAR UM VALOR ESTIMATIVO COERENTE]".
+      6. Seção "4. DECLARAÇÕES LEGAIS OBRIGATÓRIAS": Escreva um parágrafo declarando que estão inclusos no valor cotado todos os tributos, encargos fiscais, sociais, trabalhistas e previdenciários. Declare também que a empresa não incide nas vedações da Lei nº 14.133/2021.
+      7. Encerramento: Local e Data (${perfil.sede || 'Sede'}, ${dataHoje}), seguido de um espaço para assinatura do Representante Legal.
+
+      Não use markdown de código. Formate como um documento de texto claro.
     `;
 
     const response = await openai.chat.completions.create({
@@ -244,6 +248,35 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Erro ao gerar a proposta." });
+  }
+});
+
+app.post('/api/ia/melhorar-proposta', async (req, res) => {
+  try {
+    const { textoAtual, instrucao } = req.body;
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const promptSistema = `
+      Você é um revisor jurídico sênior e especialista em licitações públicas. O texto abaixo é uma proposta de licitação.
+      O usuário solicitou a seguinte alteração/melhoria no documento: "${instrucao}"
+      
+      Sua tarefa é REVISAR e AJUSTAR o documento atendendo EXATAMENTE ao pedido do usuário.
+      Mantenha a formalidade, corrija eventuais erros de formatação e mantenha os dados originais da empresa e valores intactos (a menos que o usuário peça explicitamente para mudar).
+      Não use marcação markdown (como asteriscos ou hashtags), retorne o texto limpo para impressão.
+      
+      TEXTO ORIGINAL:
+      ${textoAtual}
+    `;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "system", content: promptSistema }],
+    });
+
+    res.json({ propostaText: response.choices[0].message.content });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Erro ao melhorar a proposta." });
   }
 });
 
@@ -374,9 +407,14 @@ app.get('/api/licitacoes', async (req, res) => {
 app.put('/api/licitacoes/:id/proposta', async (req, res) => {
   try {
     const id = Number(req.params.id);
+    const { textoProposta } = req.body; 
+    
     const licitacaoAtualizada = await prisma.licitacao.update({
       where: { id },
-      data: { propostaGerada: true }
+      data: { 
+        propostaGerada: true,
+        textoProposta: textoProposta 
+      }
     });
     res.json(licitacaoAtualizada);
   } catch (error) {
