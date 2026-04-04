@@ -116,19 +116,24 @@ app.post('/api/ia/analisar-licitacao', async (req, res) => {
   }
 });
 
-// NOVA ROTA: O Agente Autonomo da IA
 app.post('/api/ia/triagem-automatica', async (req, res) => {
   try {
     const perfil = await prisma.perfil.findFirst();
     if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado." });
 
-    // 1. O agente vai no PNCP buscar as novidades (usando 'software' como padrao)
-    const urlPNCP = `https://pncp.gov.br/api/search/?q=software&tipos_documento=edital&ordenacao=-data_publicacao_pncp&pagina=1`;
-    const responsePNCP = await fetch(urlPNCP, { headers: { "Accept": "application/json" } });
-    const dataPNCP = await responsePNCP.json();
+    const headers = { "Accept": "application/json", "User-Agent": "Mozilla/5.0" };
+    const urlE = `https://pncp.gov.br/api/search/?q=software&tipos_documento=edital&ordenacao=-data_publicacao_pncp&pagina=1`;
+    const urlD = `https://pncp.gov.br/api/search/?q=software&tipos_documento=aviso_contratacao_direta&ordenacao=-data_publicacao_pncp&pagina=1`;
 
-    // Pegamos os 3 mais recentes (limitamos a 3 para a apresentacao nao demorar muito)
-    const items = dataPNCP.items.filter((item: any) => item.orgao_nome).slice(0, 3);
+    const [resE, resD] = await Promise.all([fetch(urlE, { headers }), fetch(urlD, { headers })]);
+    
+    const dataE = resE.ok ? await resE.json() : {};
+    const dataD = resD.ok ? await resD.json() : {};
+
+    let itemsBrutos = [...(dataE.items || dataE.data || []), ...(dataD.items || dataD.data || [])];
+    itemsBrutos.sort((a, b) => new Date(b.data_publicacao_pncp).getTime() - new Date(a.data_publicacao_pncp).getTime());
+    
+    const items = itemsBrutos.filter((item: any) => item.orgao_nome).slice(0, 3);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     
     let novosMatches = 0;
@@ -136,7 +141,6 @@ app.post('/api/ia/triagem-automatica', async (req, res) => {
     for (const item of items) {
       const objetoLicitacao = item.description || item.titulo || "Sem descricao";
       
-      // Regra de Ouro: So analisa se essa licitacao ainda nao estiver no nosso Banco de Dados
       const existe = await prisma.licitacao.findFirst({ where: { objeto: objetoLicitacao } });
       if (existe) continue;
 
@@ -245,17 +249,76 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
 
 app.post('/api/pncp/buscar', async (req, res) => {
   try {
-    const { palavraChave } = req.body;
+    const { palavraChave, pagina = 1, itensPorPagina = 10, tipoDocumento = 'todos' } = req.body;
+    
     if (!palavraChave) return res.status(400).json({ error: "Palavra chave obrigatoria." });
 
-    const urlPNCP = `https://pncp.gov.br/api/search/?q=${palavraChave}&tipos_documento=edital&ordenacao=-data_publicacao_pncp&pagina=1`;
-    const response = await fetch(urlPNCP, { headers: { "Accept": "application/json" } });
-    if (!response.ok) throw new Error(`Erro API Governo: ${response.status}`);
+    const termoCodificado = encodeURIComponent(palavraChave);
+    const headers = { "Accept": "application/json", "User-Agent": "Mozilla/5.0" };
     
-    const data = await response.json();
-    const editaisEncontrados = data.items
+    const pag = Number(pagina);
+    const limit = Number(itensPorPagina);
+
+    // Calculamos uma margem gigantesca para a paginação local funcionar mesmo se filtrarmos muitos itens fora.
+    // Sempre buscamos desde a API página 1 até a página necessária para preencher o que o usuário quer.
+    const itemsNeeded = pag * limit * 2; 
+    let apiPagesToFetch = Math.ceil(itemsNeeded / 10);
+    if (apiPagesToFetch > 15) apiPagesToFetch = 15; // Proteção para a API do governo não nos bloquear
+
+    const urls: string[] = [];
+    for (let i = 1; i <= apiPagesToFetch; i++) {
+        urls.push(`https://pncp.gov.br/api/search/?q=${termoCodificado}&tipos_documento=edital&ordenacao=-data_publicacao_pncp&pagina=${i}`);
+        urls.push(`https://pncp.gov.br/api/search/?q=${termoCodificado}&tipos_documento=aviso_contratacao_direta&ordenacao=-data_publicacao_pncp&pagina=${i}`);
+    }
+
+    // Faz as chamadas simultâneas 
+    const responses = await Promise.all(urls.map(url => fetch(url, { headers }).catch(() => null)));
+    const jsons = await Promise.all(responses.map(res => (res && res.ok) ? res.json() : {}));
+
+    let todosItems: any[] = [];
+    let maxTotalEditais = 0;
+    let maxTotalDispensas = 0;
+
+    jsons.forEach((data, index) => {
+        if (data && data.items) todosItems.push(...data.items);
+        else if (data && data.data) todosItems.push(...data.data);
+        
+        // Pega os totais oficias que vêm no JSON (sem multiplicadores falsos)
+        const tr = Number(data?.totalRegistros || data?.total_registros || data?.totalElements || 0);
+        
+        if (index % 2 === 0) { // URLS pares eram Editais
+            if (tr > maxTotalEditais) maxTotalEditais = tr;
+        } else { // URLS ímpares eram Dispensas
+            if (tr > maxTotalDispensas) maxTotalDispensas = tr;
+        }
+    });
+
+    // 1. SOLUÇÃO DO BUG DO TOTAL
+    let totalRealEncontrado = 0;
+    if (tipoDocumento === 'todos') {
+        totalRealEncontrado = maxTotalEditais + maxTotalDispensas;
+    } else if (tipoDocumento === 'edital') {
+        totalRealEncontrado = maxTotalEditais;
+    } else {
+        totalRealEncontrado = maxTotalDispensas;
+    }
+
+    if (totalRealEncontrado === 0 && todosItems.length > 0) {
+        totalRealEncontrado = todosItems.length;
+    }
+
+    // Remove as duplicatas que vêm nativamente na API cruzada
+    todosItems = todosItems.filter((v, i, a) => a.findIndex(t => t.item_url === v.item_url) === i);
+
+    // Ordenação bruta antes de formatar os dados
+    todosItems.sort((a, b) => {
+        const dateA = new Date(a.data_publicacao_pncp).getTime();
+        const dateB = new Date(b.data_publicacao_pncp).getTime();
+        return (dateB || 0) - (dateA || 0);
+    });
+
+    let editaisMapeados = todosItems
       .filter((item: any) => item.orgao_nome || item.orgaoEntidade?.razaoSocial)
-      .slice(0, 8)
       .map((item: any) => ({
           orgao: item.orgao_nome || item.orgaoEntidade?.razaoSocial || "Orgao nao informado",
           modalidade: item.modalidade_licitacao_nome || "Nao informada",
@@ -266,9 +329,35 @@ app.post('/api/pncp/buscar', async (req, res) => {
           link: item.item_url ? `https://pncp.gov.br/app/editais${item.item_url.replace('/compras', '')}` : "Sem link"
       }));
 
-    res.json({ quantidade: editaisEncontrados.length, editais: editaisEncontrados });
+    // 2. SOLUÇÃO DO BUG DE NÃO EXIBIR "10" OU "20" AO FILTRAR (Paginação local)
+    if (tipoDocumento === 'edital') {
+      editaisMapeados = editaisMapeados.filter((e: any) => 
+        !e.modalidade.toLowerCase().includes('dispensa') && 
+        !e.modalidade.toLowerCase().includes('inexigibilidade')
+      );
+    } else if (tipoDocumento === 'aviso_contratacao_direta') {
+      editaisMapeados = editaisMapeados.filter((e: any) => 
+        e.modalidade.toLowerCase().includes('dispensa') || 
+        e.modalidade.toLowerCase().includes('inexigibilidade')
+      );
+    }
+
+    // Agora que a lista está purificada pelo seu filtro, cortamos os 10 ou 20 exatos para exibir.
+    const startIndex = (pag - 1) * limit;
+    const endIndex = startIndex + limit;
+    const arrayPaginadoParaExibir = editaisMapeados.slice(startIndex, endIndex);
+
+    const totalPaginasCalculadas = Math.max(1, Math.ceil(totalRealEncontrado / limit));
+
+    res.json({ 
+      editais: arrayPaginadoParaExibir,
+      totalRegistros: totalRealEncontrado,
+      totalPaginas: totalPaginasCalculadas,
+      paginaAtual: pag
+    });
+
   } catch (error) {
-    console.error(error);
+    console.error("ERRO NA ROTA DE BUSCA:", error);
     res.status(500).json({ error: "Falha ao se comunicar com o portal do Governo (PNCP)." });
   }
 });
