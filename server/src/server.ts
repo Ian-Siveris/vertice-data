@@ -53,6 +53,30 @@ app.post('/api/perfil', async (req, res) => {
   }
 });
 
+// NOVA ROTA: Salvar preferências de notificação do usuário
+app.put('/api/perfil/alertas', async (req, res) => {
+  try {
+    const { emailAtivo, freqEmail, scoreMinimo } = req.body;
+    
+    const perfil = await prisma.perfil.findFirst();
+    if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado. Cadastre a empresa primeiro." });
+
+    const perfilAtualizado = await prisma.perfil.update({
+      where: { id: perfil.id },
+      data: { 
+        alertaEmailAtivo: emailAtivo, 
+        alertaFrequencia: freqEmail, 
+        alertaScoreMinimo: Number(scoreMinimo) 
+      }
+    });
+
+    res.json(perfilAtualizado);
+  } catch (error) {
+    console.error("Erro ao salvar configs de alerta:", error);
+    res.status(500).json({ error: "Erro ao salvar preferencias." });
+  }
+});
+
 app.post('/api/ia/analisar-licitacao', async (req, res) => {
   try {
     const { orgao, objeto, valorEstimado, modalidade, local } = req.body;

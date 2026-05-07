@@ -18,6 +18,9 @@ model Perfil {
   diferenciais      String   @default("Nenhum")
   capitalSocial     Float
   patrimonioLiquido Float
+  alertaEmailAtivo  Boolean  @default(true)
+  alertaFrequencia  String   @default("Diário (Às 08:00)")
+  alertaScoreMinimo Int      @default(80)
 }
 
 model Licitacao {
@@ -30,5 +33,5 @@ model Licitacao {
   justificativa   String
   propostaGerada  Boolean  @default(false)
   createdAt       DateTime @default(now())
-  textoProposta  String?
+  textoProposta   String?
 }
