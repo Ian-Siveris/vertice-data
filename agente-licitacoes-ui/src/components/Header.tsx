@@ -21,7 +21,7 @@ export function Header() {
             <span>Vértice<span className="text-brand-green">.Data</span></span>
           </Link>
 
-          {/* Menu de Navegacao Principal */}
+          {/* Menu de Navegação Principal */}
           <nav className="hidden md:flex items-center gap-8 absolute left-1/2 transform -translate-x-1/2">
             <Link 
               to="/" 
@@ -35,12 +35,12 @@ export function Header() {
             >
               Busca Geral
             </Link>
-            {/* NOVO BOTAO: Gestao e Propostas */}
+            {/* NOVO BOTÃO: Gestão e Propostas */}
             <Link 
               to="/dashboard" 
               className={`text-sm font-medium transition-colors ${isActive('/dashboard') ? 'text-brand-green border-b-2 border-brand-green pb-1' : 'text-slate-300 hover:text-white'}`}
             >
-              Gestao e Propostas
+              Gestão e Propostas
             </Link>
           </nav>
 

@@ -24,7 +24,7 @@ export function NotificacoesPanel({ isOpen, onClose }: NotificacoesPanelProps) {
   const [avisos, setAvisos] = useState<Aviso[]>([]);
   const [carregando, setCarregando] = useState(false);
 
-  // Estados dinâmicos para a aba de configuração
+  // Estados dinâmicos para a aba de configurações
   const [emailAtivo, setEmailAtivo] = useState(true);
   const [freqEmail, setFreqEmail] = useState('Diário (Às 08:00)');
   const [scoreMinimo, setScoreMinimo] = useState(80);
@@ -46,7 +46,7 @@ export function NotificacoesPanel({ isOpen, onClose }: NotificacoesPanelProps) {
       api.get('/perfil')
         .then(res => {
           if (res.data && res.data.id) {
-             // Atualiza os seletores da tela com o que veio do banco
+             // Atualiza os seletores da tela com os dados que vieram do banco
              setEmailAtivo(res.data.alertaEmailAtivo ?? true);
              setFreqEmail(res.data.alertaFrequencia ?? 'Diário (Às 08:00)');
              setScoreMinimo(res.data.alertaScoreMinimo ?? 80);
@@ -59,7 +59,7 @@ export function NotificacoesPanel({ isOpen, onClose }: NotificacoesPanelProps) {
 
   if (!isOpen) return null;
 
-  // Função que realmente salva no banco de dados
+  // Função que salva as configurações no banco de dados
   const handleSalvarConfig = async () => {
     setSalvandoBackend(true);
     try {
