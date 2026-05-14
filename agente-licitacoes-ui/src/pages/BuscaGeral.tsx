@@ -151,9 +151,13 @@ export function BuscaGeral() {
     setAnalisandoId(index);
 
     try {
+      // AQUI ESTÁ A MÁGICA DO RAG: Enviamos o link do edital disfarçado de 'linkPdf'
       const response = await api.post(
         '/ia/analisar-licitacao',
-        edital
+        {
+          ...edital,
+          linkPdf: edital.link 
+        }
       );
 
       setResultadoIA({

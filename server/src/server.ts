@@ -12,13 +12,118 @@ const app = express();
 const PORT = 3001;
 const prisma = new PrismaClient();
 
+async function buscarUrlDoPdfReal(urlHtml: string): Promise<string | null> {
+  try {
+    const regex = /\/(\d{14})\/(\d{4})\/(\d+)/;
+    const match = urlHtml.match(regex);
+
+    if (!match) {
+        console.log(`[PNCP] Não foi possível extrair chaves da URL: ${urlHtml}`);
+        return null;
+    }
+
+    const [_, cnpj, ano, sequencial] = match;
+    const arquivosApiUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`;
+
+    const response = await fetch(arquivosApiUrl);
+    if (!response.ok) return null;
+
+    const arquivos = await response.json();
+
+    let arquivoPdf = arquivos.find((arq: any) => 
+        (arq.tipoDocumentoId === 1 || arq.titulo?.toLowerCase().includes('edital')) && 
+        arq.titulo?.toLowerCase().includes('.pdf')
+    );
+
+    if (!arquivoPdf) {
+        arquivoPdf = arquivos.find((arq: any) => arq.titulo?.toLowerCase().includes('.pdf'));
+    }
+
+    if (arquivoPdf) {
+        const idArquivo = arquivoPdf.sequencial || arquivoPdf.sequencialDocumento || arquivoPdf.idArquivo || arquivoPdf.id;
+
+        if (!idArquivo) {
+           console.log(`[PNCP] Encontrou o PDF, mas a chave de ID mudou. Chaves disponíveis na API: ${Object.keys(arquivoPdf).join(', ')}`);
+           return null;
+        }
+
+        const linkDownload = `https://pncp.gov.br/api/pncp/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos/${idArquivo}`;
+        console.log(`[PNCP] Sucesso! PDF Encontrado: ${arquivoPdf.titulo} (ID Interno: ${idArquivo})`);
+        
+        return linkDownload;
+    }
+
+    console.log(`[PNCP] Nenhum PDF encontrado publicamente nos anexos deste órgão.`);
+    return null;
+  } catch (error) {
+    console.error("Erro na API de arquivos do PNCP:", error);
+    return null;
+  }
+}
+
+async function extrairTextoDoPdf(urlHtml: string): Promise<string> {
+  try {
+    console.log(`\n[RAG] Iniciando engenharia reversa do link...`);
+    
+    const urlBinarioPdf = await buscarUrlDoPdfReal(urlHtml);
+
+    if (!urlBinarioPdf) {
+        console.log(`[RAG] PDF indisponível. Análise será baseada no resumo.`);
+        return "O documento PDF não foi anexado publicamente ou não está disponível. Análise baseada apenas no resumo do objeto.";
+    }
+
+    console.log(`[RAG] Baixando Stream do PDF Binário: ${urlBinarioPdf}`);
+
+    const response = await fetch(urlBinarioPdf);
+    if (!response.ok) return "Erro ao tentar baixar o arquivo binário.";
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    console.log(`[RAG] Decodificando documento (${buffer.length} bytes)...`);
+    
+    const PDFParser = require("pdf2json");
+    
+    let textoBruto = await new Promise<string>((resolve, reject) => {
+        const pdfParser = new PDFParser(null, 1);
+        
+        pdfParser.on("pdfParser_dataError", (errData: any) => {
+            reject(new Error(errData.parserError));
+        });
+        
+        pdfParser.on("pdfParser_dataReady", () => {
+            resolve(pdfParser.getRawTextContent());
+        });
+        
+        pdfParser.parseBuffer(buffer);
+    });
+    
+    textoBruto = decodeURIComponent(textoBruto).replace(/\r\n/g, ' ').replace(/\s+/g, ' ');
+    
+    console.log("\n==================================================");
+    console.log("[RAG] TEXTO EXTRAÍDO COM SUCESSO (Preview):");
+    console.log("==================================================");
+    console.log(textoBruto.substring(0, 1500) + "\n\n... [CONTINUA LENDO EM BACKGROUND]");
+    console.log("==================================================\n");
+    
+    if (textoBruto.length > 35000) {
+      textoBruto = textoBruto.substring(0, 35000) + "\n... [TEXTO TRUNCADO POR LIMITE DE TOKENS DA IA]";
+    }
+    
+    return textoBruto;
+  } catch (error) {
+    console.error("Erro Crítico no extrator RAG:", error);
+    return "Falha na extração do texto. O PDF pode estar protegido ou o formato é incompatível.";
+  }
+}
+
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 
 app.get('/api/status', (req, res) => {
-  res.json({ status: 'online', message: 'Servidor Vertice Data pronto para o TCC!' });
+  res.json({ status: 'online', message: 'Servidor Vertice Data operacional.' });
 });
 
 app.get('/api/perfil', async (req, res) => {
@@ -53,13 +158,12 @@ app.post('/api/perfil', async (req, res) => {
   }
 });
 
-// NOVA ROTA: Salvar preferências de notificação do usuário
 app.put('/api/perfil/alertas', async (req, res) => {
   try {
     const { emailAtivo, freqEmail, scoreMinimo } = req.body;
     
     const perfil = await prisma.perfil.findFirst();
-    if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado. Cadastre a empresa primeiro." });
+    if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado." });
 
     const perfilAtualizado = await prisma.perfil.update({
       where: { id: perfil.id },
@@ -79,37 +183,51 @@ app.put('/api/perfil/alertas', async (req, res) => {
 
 app.post('/api/ia/analisar-licitacao', async (req, res) => {
   try {
-    const { orgao, objeto, valorEstimado, modalidade, local } = req.body;
+    const { orgao, objeto, valorEstimado, modalidade, local, linkPdf } = req.body;
 
     const perfil = await prisma.perfil.findFirst();
-    if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado. Cadastre a empresa primeiro." });
+    if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado." });
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+    let textoEdital = "Texto completo não fornecido. Análise baseada apenas no resumo do objeto.";
+    if (linkPdf && linkPdf !== "Sem link") {
+      textoEdital = await extrairTextoDoPdf(linkPdf);
+    }
+
     const promptSistema = `
-      Voce e um especialista em licitacoes. Analise o match entre esta EMPRESA e esta LICITACAO.
-      Considere o Porte da empresa (ME/EPP tem vantagens), a localidade e os diferenciais.
+      Você é um Analista de Risco e Viabilidade Sênior especialista em licitações públicas.
+      Analise o match entre a EMPRESA e as regras ocultas do EDITAL.
       
-      EMPRESA:
-      - Razao Social: ${perfil.razaoSocial}
+      DADOS DA EMPRESA:
+      - Razão Social: ${perfil.razaoSocial}
       - Porte: ${perfil.porte}
-      - Localizacao (Sede): ${perfil.sede}
-      - Diferenciais/Certificacoes: ${perfil.diferenciais}
-      - Experiencia: ${perfil.atestadosResumo}
+      - Localização (Sede): ${perfil.sede}
+      - Diferenciais: ${perfil.diferenciais}
+      - Experiência: ${perfil.atestadosResumo}
       - CNAEs: ${perfil.cnaes}
-      - Capital Social: R$ ${perfil.capitalSocial}
 
-      LICITACAO:
-      - Orgao: ${orgao}
-      - Local da Disputa/Execucao: ${local || "Nao informado"}
-      - Modalidade: ${modalidade || "Nao informada"}
-      - Objeto: ${objeto}
+      DADOS BÁSICOS DO EDITAL:
+      - Órgão: ${orgao}
+      - Local da Disputa: ${local || "Não informado"}
+      - Modalidade: ${modalidade || "Não informada"}
       - Valor: ${valorEstimado}
+      - Objeto: ${objeto}
 
-      Responda APENAS em JSON:
+      DOCUMENTO EXTRAÍDO (RAG ATIVADO)
+      Abaixo está o texto bruto extraído do PDF do edital. Leia com atenção e procure por:
+      1. Exigências rigorosas de Atestados de Capacidade Técnica.
+      2. Prazos de entrega.
+      3. Multas contratuais e penalidades.
+      
+      [INÍCIO DO TEXTO DO PDF]
+      ${textoEdital}
+      [FIM DO TEXTO DO PDF]
+
+      Responda APENAS em JSON estrito:
       {
-        "score": (um numero de 0 a 100 baseando-se em probabilidade de vitoria e aderencia tecnica/logistica),
-        "justificativa": (uma analise profissional justificando a nota, cruzando os dados de sede, porte, valor e objeto)
+        "score": (um número de 0 a 100 baseado na chance real de vitória),
+        "justificativa": (um parágrafo profissional justificando a nota baseada no documento)
       }
     `;
 
@@ -123,8 +241,8 @@ app.post('/api/ia/analisar-licitacao', async (req, res) => {
 
     const novaLicitacao = await prisma.licitacao.create({
       data: {
-        orgao: orgao || "Nao informado",
-        objeto: objeto || "Sem descricao",
+        orgao: orgao || "Não informado",
+        objeto: objeto || "Sem descrição",
         valorEstimado: String(valorEstimado),
         dataAbertura: "A definir",
         scoreIA: resultadoIA.score,
@@ -133,10 +251,9 @@ app.post('/api/ia/analisar-licitacao', async (req, res) => {
     });
 
     res.json(novaLicitacao);
-
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Erro na analise da IA." });
+    console.error("Erro na análise da IA:", error);
+    res.status(500).json({ error: "Erro na análise da IA." });
   }
 });
 
@@ -147,51 +264,42 @@ app.post('/api/ia/triagem-automatica', async (req, res) => {
 
     const headers = { "Accept": "application/json", "User-Agent": "Mozilla/5.0" };
     const urlE = `https://pncp.gov.br/api/search/?q=software&tipos_documento=edital&ordenacao=-data_publicacao_pncp&pagina=1`;
-    const urlD = `https://pncp.gov.br/api/search/?q=software&tipos_documento=aviso_contratacao_direta&ordenacao=-data_publicacao_pncp&pagina=1`;
-
-    const [resE, resD] = await Promise.all([fetch(urlE, { headers }), fetch(urlD, { headers })]);
     
+    const resE = await fetch(urlE, { headers });
     const dataE = resE.ok ? await resE.json() : {};
-    const dataD = resD.ok ? await resD.json() : {};
 
-    let itemsBrutos = [...(dataE.items || dataE.data || []), ...(dataD.items || dataD.data || [])];
-    itemsBrutos.sort((a, b) => new Date(b.data_publicacao_pncp).getTime() - new Date(a.data_publicacao_pncp).getTime());
+    let itemsBrutos = dataE.items || dataE.data || [];
+    const items = itemsBrutos.filter((item: any) => item.orgao_nome).slice(0, 2); 
     
-    const items = itemsBrutos.filter((item: any) => item.orgao_nome).slice(0, 3);
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    
     let novosMatches = 0;
 
     for (const item of items) {
-      const objetoLicitacao = item.description || item.titulo || "Sem descricao";
+      const objetoLicitacao = item.description || item.titulo || "Sem descrição";
       
       const existe = await prisma.licitacao.findFirst({ where: { objeto: objetoLicitacao } });
       if (existe) continue;
 
-      const orgao = item.orgao_nome || "Orgao nao informado";
+      const orgao = item.orgao_nome || "Órgão não informado";
       const valor = item.valor_global || item.valorTotalEstimado ? `R$ ${item.valor_global || item.valorTotalEstimado}` : "Valor sob consulta";
-      const modalidade = item.modalidade_licitacao_nome || "Nao informada";
-      const local = `${item.municipio_nome || 'N/A'} - ${item.uf || 'N/A'}`;
+      
+      const linkPdf = item.item_url ? `https://pncp.gov.br/app/editais${item.item_url.replace('/compras', '')}` : null;
+      let textoEdital = "Análise baseada no resumo.";
+      
+      if (linkPdf) {
+          textoEdital = await extrairTextoDoPdf(linkPdf); 
+      }
 
       const promptSistema = `
-        Voce e um especialista em licitacoes. Analise o match entre esta EMPRESA e esta LICITACAO.
+        Atue como um Agente de Triagem Autônoma. Analise o match entre a EMPRESA e esta LICITAÇÃO.
         
-        EMPRESA:
-        - Razao Social: ${perfil.razaoSocial}
-        - Porte: ${perfil.porte}
-        - Sede: ${perfil.sede}
-        - Experiencia: ${perfil.atestadosResumo}
-        - CNAEs: ${perfil.cnaes}
+        EMPRESA: Sede: ${perfil.sede} | Porte: ${perfil.porte} | Atestados: ${perfil.atestadosResumo}
+        LICITAÇÃO: ${orgao} - ${objetoLicitacao} - Valor: ${valor}
+        
+        TEXTO DO EDITAL (RAG):
+        ${textoEdital}
 
-        LICITACAO:
-        - Orgao: ${orgao}
-        - Local: ${local}
-        - Modalidade: ${modalidade}
-        - Objeto: ${objetoLicitacao}
-        - Valor: ${valor}
-
-        Responda APENAS em JSON:
-        { "score": (0 a 100), "justificativa": (analise justificando a nota) }
+        Seja rigoroso. Responda em JSON: { "score": (0 a 100), "justificativa": (sua análise) }
       `;
 
       const response = await openai.chat.completions.create({
@@ -216,11 +324,11 @@ app.post('/api/ia/triagem-automatica', async (req, res) => {
       novosMatches++;
     }
 
-    res.json({ message: "Triagem concluida com sucesso!", processadas: novosMatches });
+    res.json({ message: "Triagem com leitura de PDFs concluída!", processadas: novosMatches });
 
   } catch (error) {
-    console.error("Erro no Agente Autonomo:", error);
-    res.status(500).json({ error: "Erro durante a triagem automatica." });
+    console.error("Erro no Agente Autônomo:", error);
+    res.status(500).json({ error: "Erro durante a triagem automática." });
   }
 });
 
@@ -234,7 +342,6 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const dataHoje = new Date().toLocaleDateString('pt-BR');
 
-    // Novo Prompt Baseado nos Documentos Governamentais Oficiais
     const promptSistema = `
       Você é um advogado especialista em licitações públicas.
       Sua missão é redigir uma "CARTA-PROPOSTA PARA FORNECIMENTO" formal.
@@ -278,6 +385,8 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
 app.post('/api/ia/melhorar-proposta', async (req, res) => {
   try {
     const { textoAtual, instrucao } = req.body;
+    
+    const perfil = await prisma.perfil.findFirst();
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const promptSistema = `
@@ -285,7 +394,14 @@ app.post('/api/ia/melhorar-proposta', async (req, res) => {
       O usuário solicitou a seguinte alteração/melhoria no documento: "${instrucao}"
       
       Sua tarefa é REVISAR e AJUSTAR o documento atendendo EXATAMENTE ao pedido do usuário.
-      Mantenha a formalidade, corrija eventuais erros de formatação e mantenha os dados originais da empresa e valores intactos (a menos que o usuário peça explicitamente para mudar).
+      Mantenha a formalidade, corrija eventuais erros de formatação.
+      
+      REGRA DE OURO (MEMÓRIA GLOBAL): 
+      NUNCA altere, invente ou apague os dados reais da empresa durante a reescrita. O CNPJ, Razão Social e Endereço devem permanecer estritamente os seguintes:
+      - Razão Social: ${perfil?.razaoSocial || "Dados não informados"}
+      - CNPJ: ${perfil?.cnpj || "Dados não informados"}
+      - Sede: ${perfil?.sede || "Dados não informados"}
+      
       Não use marcação markdown (como asteriscos ou hashtags), retorne o texto limpo para impressão.
       
       TEXTO ORIGINAL:
@@ -316,11 +432,9 @@ app.post('/api/pncp/buscar', async (req, res) => {
     const pag = Number(pagina);
     const limit = Number(itensPorPagina);
 
-    // Calculamos uma margem gigantesca para a paginação local funcionar mesmo se filtrarmos muitos itens fora.
-    // Sempre buscamos desde a API página 1 até a página necessária para preencher o que o usuário quer.
     const itemsNeeded = pag * limit * 2; 
     let apiPagesToFetch = Math.ceil(itemsNeeded / 10);
-    if (apiPagesToFetch > 15) apiPagesToFetch = 15; // Proteção para a API do governo não nos bloquear
+    if (apiPagesToFetch > 15) apiPagesToFetch = 15;
 
     const urls: string[] = [];
     for (let i = 1; i <= apiPagesToFetch; i++) {
@@ -328,7 +442,6 @@ app.post('/api/pncp/buscar', async (req, res) => {
         urls.push(`https://pncp.gov.br/api/search/?q=${termoCodificado}&tipos_documento=aviso_contratacao_direta&ordenacao=-data_publicacao_pncp&pagina=${i}`);
     }
 
-    // Faz as chamadas simultâneas 
     const responses = await Promise.all(urls.map(url => fetch(url, { headers }).catch(() => null)));
     const jsons = await Promise.all(responses.map(res => (res && res.ok) ? res.json() : {}));
 
@@ -340,17 +453,15 @@ app.post('/api/pncp/buscar', async (req, res) => {
         if (data && data.items) todosItems.push(...data.items);
         else if (data && data.data) todosItems.push(...data.data);
         
-        // Pega os totais oficias que vêm no JSON (sem multiplicadores falsos)
         const tr = Number(data?.totalRegistros || data?.total_registros || data?.totalElements || 0);
         
-        if (index % 2 === 0) { // URLS pares eram Editais
+        if (index % 2 === 0) { 
             if (tr > maxTotalEditais) maxTotalEditais = tr;
-        } else { // URLS ímpares eram Dispensas
+        } else { 
             if (tr > maxTotalDispensas) maxTotalDispensas = tr;
         }
     });
 
-    // 1. SOLUÇÃO DO BUG DO TOTAL
     let totalRealEncontrado = 0;
     if (tipoDocumento === 'todos') {
         totalRealEncontrado = maxTotalEditais + maxTotalDispensas;
@@ -364,10 +475,8 @@ app.post('/api/pncp/buscar', async (req, res) => {
         totalRealEncontrado = todosItems.length;
     }
 
-    // Remove as duplicatas que vêm nativamente na API cruzada
     todosItems = todosItems.filter((v, i, a) => a.findIndex(t => t.item_url === v.item_url) === i);
 
-    // Ordenação bruta antes de formatar os dados
     todosItems.sort((a, b) => {
         const dateA = new Date(a.data_publicacao_pncp).getTime();
         const dateB = new Date(b.data_publicacao_pncp).getTime();
@@ -386,7 +495,6 @@ app.post('/api/pncp/buscar', async (req, res) => {
           link: item.item_url ? `https://pncp.gov.br/app/editais${item.item_url.replace('/compras', '')}` : "Sem link"
       }));
 
-    // 2. SOLUÇÃO DO BUG DE NÃO EXIBIR "10" OU "20" AO FILTRAR (Paginação local)
     if (tipoDocumento === 'edital') {
       editaisMapeados = editaisMapeados.filter((e: any) => 
         !e.modalidade.toLowerCase().includes('dispensa') && 
@@ -399,7 +507,6 @@ app.post('/api/pncp/buscar', async (req, res) => {
       );
     }
 
-    // Agora que a lista está purificada pelo seu filtro, cortamos os 10 ou 20 exatos para exibir.
     const startIndex = (pag - 1) * limit;
     const endIndex = startIndex + limit;
     const arrayPaginadoParaExibir = editaisMapeados.slice(startIndex, endIndex);

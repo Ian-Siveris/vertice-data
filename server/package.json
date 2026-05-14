@@ -19,7 +19,8 @@
     "helmet": "^8.1.0",
     "langchain": "^1.2.39",
     "morgan": "^1.10.1",
-    "openai": "^6.33.0"
+    "openai": "^6.33.0",
+    "pdf2json": "^4.0.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
