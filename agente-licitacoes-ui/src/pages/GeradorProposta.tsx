@@ -38,7 +38,6 @@ export function GeradorProposta() {
   const [instrucoesUser, setInstrucoesUser] =
     useState('');
 
-  // Função centralizada para salvar o texto da proposta no banco
   const salvarTextoNoBanco = async (
     textoParaSalvar: string
   ) => {
@@ -73,9 +72,6 @@ export function GeradorProposta() {
       return;
     }
 
-    // Se a licitação já veio com texto do banco
-    // (porque foi acessada pela aba Gestão),
-    // carrega direto sem chamar a IA novamente.
     if (edital.textoProposta) {
       setDocumentoIA(edital.textoProposta);
       setTextoEditavel(edital.textoProposta);
@@ -84,10 +80,11 @@ export function GeradorProposta() {
       return;
     }
 
-    // Se não tem texto, é uma nova geração,
-    // então chama a IA.
     api
-      .post('/ia/gerar-proposta', edital)
+      .post('/ia/gerar-proposta', {
+        ...edital,
+        linkPdf: edital.link 
+      })
       .then((response) => {
         const texto =
           response.data.propostaText;
@@ -96,7 +93,6 @@ export function GeradorProposta() {
         setTextoEditavel(texto);
         setIsGenerating(false);
 
-        // Salva esse primeiro texto gerado
         salvarTextoNoBanco(texto);
       })
       .catch((error) => {
@@ -109,7 +105,6 @@ export function GeradorProposta() {
         setIsGenerating(false);
       });
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edital, navigate]);
 
   const handleCopy = () => {
@@ -125,16 +120,14 @@ export function GeradorProposta() {
   };
 
   const handlePrintPDF = () => {
-    // Pega exatamente a div onde está o texto da proposta
     const element = document.getElementById(
       'documento-para-imprimir'
     );
 
     if (!element) return;
 
-    // Configurações para um PDF em formato A4
     const opt = {
-      margin: 15, // Margem em milímetros
+      margin: 15, 
 
       filename: `Proposta_${edital.orgao.replace(
         /[^a-z0-9]/gi,
@@ -158,7 +151,6 @@ export function GeradorProposta() {
       }
     };
 
-    // Gera e baixa o PDF
     html2pdf()
       .set(opt)
       .from(element)
@@ -197,7 +189,6 @@ export function GeradorProposta() {
       setDocumentoIA(novoTexto);
       setTextoEditavel(novoTexto);
 
-      // Salva a versão melhorada pela IA
       salvarTextoNoBanco(novoTexto);
     } catch (error) {
       alert(
@@ -209,8 +200,7 @@ export function GeradorProposta() {
   };
 
   const toggleEditMode = () => {
-    // Se o usuário está saindo do modo de edição (salvando),
-    // enviamos para o banco.
+
     if (isEditing) {
       salvarTextoNoBanco(textoEditavel);
     }
@@ -422,7 +412,6 @@ export function GeradorProposta() {
         </div>
       )}
 
-      {/* MODAL DE AJUSTE (COPILOTO) */}
       {isImproveModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex justify-center items-center z-50 p-4 no-print">
 

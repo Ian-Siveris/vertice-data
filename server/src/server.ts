@@ -82,7 +82,8 @@ async function extrairTextoDoPdf(urlHtml: string): Promise<string> {
     
     console.log(`[RAG] Decodificando documento (${buffer.length} bytes)...`);
     
-    const PDFParser = require("pdf2json");
+    const evalRequire = eval('require');
+    const PDFParser = evalRequire("pdf2json");
     
     let textoBruto = await new Promise<string>((resolve, reject) => {
         const pdfParser = new PDFParser(null, 1);
@@ -334,7 +335,7 @@ app.post('/api/ia/triagem-automatica', async (req, res) => {
 
 app.post('/api/ia/gerar-proposta', async (req, res) => {
   try {
-    const { orgao, objeto, modalidade } = req.body;
+    const { orgao, objeto, modalidade, linkPdf } = req.body;
     
     const perfil = await prisma.perfil.findFirst();
     if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado." });
@@ -342,9 +343,14 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const dataHoje = new Date().toLocaleDateString('pt-BR');
 
-    const promptSistema = `
+    let textoEdital = "Texto completo do edital não fornecido. Baseie-se apenas no resumo do objeto.";
+    if (linkPdf && linkPdf !== "Sem link") {
+      textoEdital = await extrairTextoDoPdf(linkPdf);
+    }
+
+    const promptRedator = `
       Você é um advogado especialista em licitações públicas.
-      Sua missão é redigir uma "CARTA-PROPOSTA PARA FORNECIMENTO" formal.
+      Sua missão é redigir uma "CARTA-PROPOSTA PARA FORNECIMENTO" formal baseada no EDITAL OFICIAL fornecido.
 
       DADOS DA EMPRESA:
       Razão Social: ${perfil.razaoSocial}
@@ -352,33 +358,67 @@ app.post('/api/ia/gerar-proposta', async (req, res) => {
       Porte: ${perfil.porte}
       Endereço: ${perfil.sede}
 
-      DADOS DA LICITAÇÃO:
+      DADOS BÁSICOS DA LICITAÇÃO:
       Órgão: ${orgao}
       Modalidade: ${modalidade}
       Objeto: ${objeto}
 
-      REGRAS DE ESTRUTURAÇÃO (Siga este esqueleto rigorosamente):
+      TEXTO DO EDITAL (RAG ATIVADO):
+      Leia o texto abaixo extraído do PDF oficial. Extraia e inclua na proposta as "Condições de Pagamento", "Prazos de Entrega" e "Garantias" exigidas pelo órgão. Se não constarem, crie termos genéricos padrão de licitação.
+      
+      [INÍCIO DO EDITAL]
+      ${textoEdital}
+      [FIM DO EDITAL]
+
+      REGRAS DE ESTRUTURAÇÃO OBRIGATÓRIAS:
       1. Cabeçalho alinhado à esquerda com o Órgão e a Modalidade.
       2. Título centralizado: CARTA-PROPOSTA PARA FORNECIMENTO.
-      3. Seção "1. IDENTIFICAÇÃO DA PROPONENTE": Liste Razão Social, CNPJ e Endereço de forma organizada.
-      4. Seção "2. DADOS DA PROPOSTA": Inclua "Validade da proposta: 60 (sessenta) dias" e "Prazo de entrega: Conforme Edital".
-      5. Seção "3. ESPECIFICAÇÕES DO OBJETO": Descreva brevemente o objeto e crie um "Valor Total da Proposta: R$ [CRIAR UM VALOR ESTIMATIVO COERENTE]".
-      6. Seção "4. DECLARAÇÕES LEGAIS OBRIGATÓRIAS": Escreva um parágrafo declarando que estão inclusos no valor cotado todos os tributos, encargos fiscais, sociais, trabalhistas e previdenciários. Declare também que a empresa não incide nas vedações da Lei nº 14.133/2021.
-      7. Encerramento: Local e Data (${perfil.sede || 'Sede'}, ${dataHoje}), seguido de um espaço para assinatura do Representante Legal.
+      3. Seção "1. IDENTIFICAÇÃO DA PROPONENTE": Liste Razão Social, CNPJ e Endereço.
+      4. Seção "2. DADOS DA PROPOSTA": Inclua Validade (60 dias) e os Prazos e Condições extraídos do Edital acima.
+      5. Seção "3. ESPECIFICAÇÕES DO OBJETO": Descreva brevemente o objeto e crie um "Valor Total da Proposta: R$ [ESTIME UM VALOR]".
+      6. Seção "4. DECLARAÇÕES LEGAIS": Declare inclusão de todos os tributos e obediência à Lei nº 14.133/2021.
+      7. Encerramento: Local e Data (${perfil.sede || 'Sede'}, ${dataHoje}), seguido de assinatura.
 
-      Não use markdown de código. Formate como um documento de texto claro.
+      Não use marcação markdown de código (como \`\`\`). Retorne apenas o texto puro do documento.
     `;
 
-    const response = await openai.chat.completions.create({
+    const responseRedator = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
-      messages: [{ role: "system", content: promptSistema }],
+      messages: [{ role: "system", content: promptRedator }],
     });
 
-    res.json({ propostaText: response.choices[0].message.content });
+    const rascunhoProposta = responseRedator.choices[0].message.content || "";
+
+    const promptAuditor = `
+      Você é um Auditor Sênior de Compliance em Licitações.
+      Sua tarefa é revisar o documento gerado pelo Redator e garantir que não houve alucinação nos dados imutáveis da empresa.
+
+      DADOS IMUTÁVEIS (VERDADE ABSOLUTA DO BANCO DE DADOS):
+      - Razão Social: ${perfil.razaoSocial}
+      - CNPJ: ${perfil.cnpj}
+      - Endereço: ${perfil.sede}
+
+      DOCUMENTO GERADO PELO REDATOR:
+      ${rascunhoProposta}
+
+      INSTRUÇÕES DE AUDITORIA:
+      1. Analise o documento gerado.
+      2. Verifique se a Razão Social, CNPJ e Endereço constam no documento e estão EXATAMENTE iguais aos Dados Imutáveis fornecidos acima.
+      3. Se o Redator tiver omitido, errado ou inventado algum desses dados, corrija o texto do documento silenciosamente.
+      4. Se o documento estiver correto, mantenha-o intacto.
+      5. Retorne APENAS o documento final validado, pronto para impressão. Não adicione comentários, introduções ou notas de revisão.
+    `;
+
+    const responseAuditor = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "system", content: promptAuditor }],
+    });
+
+    res.json({ propostaText: responseAuditor.choices[0].message.content });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Erro ao gerar a proposta." });
+    console.error("Erro no pipeline Multi-Agent da Proposta:", error);
+    res.status(500).json({ error: "Erro ao gerar a proposta auditada." });
   }
 });
 
