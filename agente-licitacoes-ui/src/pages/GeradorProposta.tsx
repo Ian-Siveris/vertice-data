@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 
 import {
   ArrowLeft,
@@ -412,73 +413,65 @@ export function GeradorProposta() {
         </div>
       )}
 
-      {isImproveModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex justify-center items-center z-50 p-4 no-print">
+      {isImproveModalOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] overflow-y-auto bg-slate-900/50 backdrop-blur-sm no-print">
+          <div className="flex min-h-full items-center justify-center p-4 text-center">
+            
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col text-left align-middle transition-all">
 
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
+              <div className="flex justify-between items-center p-5 border-b border-slate-100 bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <Sparkles
+                    className="text-indigo-600"
+                    size={20}
+                  />
+                  <h2 className="text-md font-bold text-brand-dark">
+                    Ajustar com IA
+                  </h2>
+                </div>
 
-            <div className="flex justify-between items-center p-5 border-b border-slate-100 bg-slate-50">
-
-              <div className="flex items-center gap-2">
-                <Sparkles
-                  className="text-indigo-600"
-                  size={20}
-                />
-
-                <h2 className="text-md font-bold text-brand-dark">
-                  Ajustar com IA
-                </h2>
+                <button
+                  onClick={() => setIsImproveModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <X size={20} />
+                </button>
               </div>
 
-              <button
-                onClick={() =>
-                  setIsImproveModalOpen(false)
-                }
-                className="text-slate-400 hover:text-slate-600 p-1"
-              >
-                <X size={20} />
-              </button>
-            </div>
+              <div className="p-5">
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                  Como a IA deve alterar este documento?
+                </label>
 
-            <div className="p-5">
+                <textarea
+                  value={instrucoesUser}
+                  onChange={(e) => setInstrucoesUser(e.target.value)}
+                  placeholder="Ex.: altere o valor total para R$ 150.000,00 e adicione uma cláusula informando que o frete está incluso."
+                  className="w-full h-32 p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none text-sm"
+                />
+              </div>
 
-              <label className="block text-sm font-bold text-slate-700 mb-2">
-                Como a IA deve alterar este documento?
-              </label>
+              <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+                <button
+                  onClick={() => setIsImproveModalOpen(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-md transition-colors"
+                >
+                  Cancelar
+                </button>
 
-              <textarea
-                value={instrucoesUser}
-                onChange={(e) =>
-                  setInstrucoesUser(
-                    e.target.value
-                  )
-                }
-                placeholder="Ex.: altere o valor total para R$ 150.000,00 e adicione uma cláusula informando que o frete está incluso."
-                className="w-full h-32 p-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none text-sm"
-              />
-            </div>
-
-            <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-
-              <button
-                onClick={() =>
-                  setIsImproveModalOpen(false)
-                }
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-md transition-colors"
-              >
-                Cancelar
-              </button>
-
-              <button
-                onClick={submitImprove}
-                className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2"
-              >
-                <Wand2 size={16} />
-                Aplicar Alterações
-              </button>
+                <button
+                  onClick={submitImprove}
+                  className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2"
+                >
+                  <Wand2 size={16} />
+                  Aplicar Alterações
+                </button>
+              </div>
+              
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
