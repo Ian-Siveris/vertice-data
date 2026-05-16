@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 dotenv.config();
 
@@ -189,56 +190,60 @@ app.post('/api/ia/analisar-licitacao', async (req, res) => {
     const perfil = await prisma.perfil.findFirst();
     if (!perfil) return res.status(404).json({ error: "Perfil nao encontrado." });
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
     let textoEdital = "Texto completo não fornecido. Análise baseada apenas no resumo do objeto.";
     if (linkPdf && linkPdf !== "Sem link") {
       textoEdital = await extrairTextoDoPdf(linkPdf);
     }
 
+    console.log(`[RAG] Iniciando Leitura Brutal com Gemini (Contexto: ${textoEdital.length} caracteres)...`);
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+    const model = genAI.getGenerativeModel({ 
+        model: "gemini-2.5-flash",
+        generationConfig: { responseMimeType: "application/json" }
+    });
+
     const promptSistema = `
-      Você é um Analista de Risco e Viabilidade Sênior especialista em licitações públicas.
-      Analise o match entre a EMPRESA e as regras ocultas do EDITAL.
-      
+      Você é um Analista de Risco e Viabilidade Sênior.
+      Sua missão é ler o edital INTEIRO e cruzar com o Perfil da Empresa para dar um veredito de viabilidade.
+
       DADOS DA EMPRESA:
       - Razão Social: ${perfil.razaoSocial}
       - Porte: ${perfil.porte}
-      - Localização (Sede): ${perfil.sede}
+      - Sede: ${perfil.sede}
       - Diferenciais: ${perfil.diferenciais}
-      - Experiência: ${perfil.atestadosResumo}
-      - CNAEs: ${perfil.cnaes}
+      - Atestados: ${perfil.atestadosResumo}
 
       DADOS BÁSICOS DO EDITAL:
       - Órgão: ${orgao}
-      - Local da Disputa: ${local || "Não informado"}
       - Modalidade: ${modalidade || "Não informada"}
       - Valor: ${valorEstimado}
       - Objeto: ${objeto}
 
-      DOCUMENTO EXTRAÍDO (RAG ATIVADO)
-      Abaixo está o texto bruto extraído do PDF do edital. Leia com atenção e procure por:
-      1. Exigências rigorosas de Atestados de Capacidade Técnica.
-      2. Prazos de entrega.
-      3. Multas contratuais e penalidades.
-      
-      [INÍCIO DO TEXTO DO PDF]
+      TEXTO BRUTO DO PDF (RAG):
       ${textoEdital}
-      [FIM DO TEXTO DO PDF]
 
-      Responda APENAS em JSON estrito:
+      INSTRUÇÕES DE ANÁLISE RIGOROSA:
+      1. Leia o texto completo.
+      2. Procure ativamente por: Prazos de entrega exigentes, multas contratuais pesadas e exigências rigorosas de atestados técnicos.
+      3. Avalie a viabilidade real da empresa ganhar e executar este contrato.
+
+      Retorne APENAS um objeto JSON estrito com a seguinte estrutura:
       {
-        "score": (um número de 0 a 100 baseado na chance real de vitória),
-        "justificativa": (um parágrafo profissional justificando a nota baseada no documento)
+        "score": (número de 0 a 100. Diminua a nota se encontrar riscos graves),
+        "justificativa": (Um único parágrafo profissional e direto contendo: a viabilidade, citação dos riscos específicos encontrados na leitura, e o veredito final.)
       }
     `;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "system", content: promptSistema }],
-      response_format: { type: "json_object" }
-    });
-
-    const resultadoIA = JSON.parse(response.choices[0].message.content || "{}");
+    const result = await model.generateContent(promptSistema);
+    const responseText = result.response.text();
+    
+    let resultadoIA = { score: 50, justificativa: "Erro ao formatar resposta da IA." };
+    try {
+        resultadoIA = JSON.parse(responseText);
+    } catch (e) {
+        console.error("Erro no parse do JSON do Gemini:", responseText);
+    }
 
     const novaLicitacao = await prisma.licitacao.create({
       data: {
@@ -253,7 +258,7 @@ app.post('/api/ia/analisar-licitacao', async (req, res) => {
 
     res.json(novaLicitacao);
   } catch (error) {
-    console.error("Erro na análise da IA:", error);
+    console.error("Erro na análise Multi-Model (Gemini):", error);
     res.status(500).json({ error: "Erro na análise da IA." });
   }
 });
