@@ -10,7 +10,7 @@ export function Layout() {
         <Outlet />
       </main>
       <footer className="py-6 text-center text-sm text-slate-500">
-        MVP TCC - Sistema de Triagem de Licitações com IA
+        Vértice.Data - Sistema de Triagem de Licitações com AI
       </footer>
     </div>
   );
